@@ -30,7 +30,6 @@ interface GlobeClientProps {
   onGlobeClick: (lat: number, lng: number) => void;
   selectedLocation: { lat: number; lng: number } | null;
   isZoomed: boolean;
-  currentAltitude: number;
 }
 
 type GlobeMethods = any;
@@ -73,7 +72,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
   onGlobeClick,
   selectedLocation,
   isZoomed,
-  currentAltitude,
 }, ref) {
   const globeRef = useRef<GlobeMethods>(undefined);
   const [globeReady, setGlobeReady] = useState(false);
@@ -82,6 +80,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
   const highlightedRef = useRef<HTMLDivElement>(null);
   const [highlightedPos, setHighlightedPos] = useState({ x: 0, y: 0, visible: false });
   const globeReadyPoller = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [internalAlt, setInternalAlt] = useState(2.5);
 
   const [countriesFeatures, setCountriesFeatures] = useState<CountryFeature[]>([]);
   const [countriesLoaded, setCountriesLoaded] = useState(false);
@@ -152,7 +151,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
   useEffect(() => {
     if (!globeRef.current || !globeReady) return;
 
-    const url = TEXTURE_LEVELS.find((t) => currentAltitude <= t.maxAlt)?.url
+    const url = TEXTURE_LEVELS.find((t) => internalAlt <= t.maxAlt)?.url
       || TEXTURE_LEVELS[0].url;
 
     if (url !== lastTextureRef.current) {
@@ -162,7 +161,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
         globe.globeImageUrl(url);
       }
     }
-  }, [currentAltitude, globeReady]);
+  }, [internalAlt, globeReady]);
 
   useEffect(() => {
     if (!globeRef.current || !globeReady || !highlightedMarkerId) return;
@@ -355,36 +354,54 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
         controls.autoRotateSpeed = 0.3;
         controls.enableZoom = true;
         controls.enablePan = false;
-        controls.minDistance = 80;
-        controls.maxDistance = 500;
+        controls.minDistance = 60;
+        controls.maxDistance = 600;
         const scene = globe.scene();
         scene.traverse((child: THREE.Object3D) => {
-          if (child instanceof THREE.Mesh) {
-            const material = child.material as THREE.MeshPhongMaterial;
-            if (material.emissive) {
-              material.emissiveIntensity = 0.15;
+          if (child instanceof THREE.Mesh && child.material) {
+            const material = child.material;
+            if (Array.isArray(material)) {
+              material.forEach((m) => { if (m.emissive) m.emissiveIntensity = 0.4; });
+            } else if ((material as THREE.MeshPhongMaterial).emissive) {
+              (material as THREE.MeshPhongMaterial).emissiveIntensity = 0.4;
             }
           }
         });
         const renderer = globe.renderer();
         if (renderer?.raycaster) {
-          renderer.raycaster.params.Points.threshold = 20;
+          renderer.raycaster.params.Points.threshold = 4;
         }
       }
     }, 50);
     return () => clearInterval(poll);
   }, [globeReady]);
 
+  useEffect(() => {
+    if (!globeReady || !isZoomed) {
+      setInternalAlt(isZoomed ? internalAlt : 2.5);
+      return;
+    }
+    const poll = setInterval(() => {
+      if (globeRef.current) {
+        const pov = globeRef.current.pointOfView();
+        if (pov?.altitude !== undefined) {
+          setInternalAlt(pov.altitude);
+        }
+      }
+    }, 400);
+    return () => clearInterval(poll);
+  }, [globeReady, isZoomed]);
+
+  const tilesActive = isZoomed && internalAlt < 1.0;
+
   const tileUrlFn = useCallback((x: number, y: number, level: number) => {
     return `https://tile.openstreetmap.org/${level}/${x}/${y}.png`;
   }, []);
 
-  const showTiles = isZoomed && currentAltitude < 1.0;
-
-  const borderOpacity = Math.min(1, Math.max(0.18, 0.55 - currentAltitude * 0.12));
-  const admin1Opacity = Math.min(1, Math.max(0, 0.35 - currentAltitude * 0.25));
-  const countryLabelsVisible = isZoomed && currentAltitude < 1.2 && countriesLoaded;
-  const admin1LabelsVisible = isZoomed && currentAltitude < 0.9 && admin1Loaded && admin1Features.length > 0;
+  const borderOpacity = Math.min(1, Math.max(0.18, 0.55 - internalAlt * 0.12));
+  const admin1Opacity = Math.min(1, Math.max(0, 0.35 - internalAlt * 0.25));
+  const countryLabelsVisible = isZoomed && internalAlt < 1.2 && countriesLoaded;
+  const admin1LabelsVisible = isZoomed && internalAlt < 0.9 && admin1Loaded && admin1Features.length > 0;
 
   const categoryColorMap: Record<string, string> = {
     attraction: '#dcd8c0',
@@ -440,23 +457,23 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
         }}
         onPointClick={handlePointClick}
         onGlobeClick={handleGlobeClick}
-        polygonsData={allPolygons}
+        polygonsData={isZoomed ? allPolygons : []}
         polygonGeoJsonGeometry="geometry"
         polygonCapColor={() => 'rgba(0,0,0,0)'}
         polygonStrokeColor={(d: any) => {
           if (d._level === 'admin1') {
-            return `rgba(180, 210, 180, ${admin1Opacity})`;
+            return `rgba(170, 200, 225, ${admin1Opacity})`;
           }
-          return `rgba(235, 228, 210, ${borderOpacity})`;
+          return `rgba(210, 220, 235, ${borderOpacity})`;
         }}
         polygonAltitude={(d: any) => d._level === 'admin1' ? 0.004 : 0.002}
-        polygonLabel={(d: any) => `<div style="background:rgba(13,13,13,0.88);padding:6px 12px;border:1px solid rgba(220,216,192,0.2);font-family:'General Sans',sans-serif;font-size:12px;color:#dcd8c0;white-space:nowrap;border-radius:2px;">${d.properties?.name || d.name}</div>`}
+        polygonLabel={(d: any) => !isZoomed ? null : `<div style="background:rgba(13,13,13,0.88);padding:6px 12px;border:1px solid rgba(220,216,192,0.2);font-family:'General Sans',sans-serif;font-size:12px;color:#dcd8c0;white-space:nowrap;border-radius:2px;">${d.properties?.name || d.name}</div>`}
         onPolygonClick={handlePolygonClick}
         onGlobeReady={() => {}}
         atmosphereColor="#dcd8c0"
         atmosphereAltitude={0.15}
-        globeTileEngineUrl={showTiles ? tileUrlFn : null}
-        globeTileEngineMaxLevel={19}
+        globeTileEngineUrl={tilesActive ? tileUrlFn : null}
+        globeTileEngineMaxLevel={20}
       />
 
       {admin1LabelsVisible && (
@@ -481,7 +498,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
 
             if (z > 0) return null;
 
-            const labelOpacity = Math.min(1, Math.max(0, (0.9 - currentAltitude) * 1.8));
+            const labelOpacity = Math.min(1, Math.max(0, (0.9 - internalAlt) * 1.8));
 
             return (
               <div
@@ -492,7 +509,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
                   top: screenY,
                   transform: 'translate(-50%, -50%)',
                   opacity: labelOpacity,
-                  fontSize: `${Math.max(9, 11 - currentAltitude * 3)}px`,
+                  fontSize: `${Math.max(9, 11 - internalAlt * 3)}px`,
                 }}
               >
                 <span className="font-mono text-accent/20 uppercase tracking-[0.2em] whitespace-nowrap">
@@ -547,7 +564,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
                   top: screenY,
                   transform: 'translate(-50%, -50%)',
                   fontSize: `${Math.max(label.size * 0.9, 11)}px`,
-                  opacity: Math.min(1, Math.max(0, (1.0 - currentAltitude) * 2)),
+                  opacity: Math.min(1, Math.max(0, (1.0 - internalAlt) * 2)),
                 }}
               >
                 <span className="font-mono text-accent/40 uppercase tracking-[0.15em] whitespace-nowrap">
@@ -580,7 +597,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
 
             if (z > 0) return null;
 
-            const labelOpacity = Math.min(1, Math.max(0, (1.2 - currentAltitude) * 1.5));
+            const labelOpacity = Math.min(1, Math.max(0, (1.2 - internalAlt) * 1.5));
 
             return (
               <div
@@ -591,7 +608,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
                   top: screenY,
                   transform: 'translate(-50%, -50%)',
                   opacity: labelOpacity,
-                  fontSize: `${Math.max(10, 13 - currentAltitude * 4)}px`,
+                  fontSize: `${Math.max(10, 13 - internalAlt * 4)}px`,
                 }}
               >
                 <span className="font-mono text-accent/25 uppercase tracking-[0.25em] whitespace-nowrap">

@@ -197,33 +197,9 @@ export default function Home() {
   const [showPanel, setShowPanel] = useState(false);
   const [selectedSpot, setSelectedSpot] = useState<TouristSpot | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [currentAltitude, setCurrentAltitude] = useState(2.5);
   const [highlightedMarkerId, setHighlightedMarkerId] = useState<string | null>(null);
   const globeClientRef = useRef<{ flyTo: (lat: number, lng: number) => void } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  // Poll altitude from globe
-  useEffect(() => {
-    if (!isZoomed) {
-      setCurrentAltitude(2.5);
-      return;
-    }
-    const interval = setInterval(() => {
-      const globeEl = document.querySelector('.globe-container canvas');
-      if (globeEl) {
-        // Try to read altitude from globe controls
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const globe = (window as any).__globeRef;
-        if (globe?.current) {
-          const pov = globe.current.pointOfView();
-          if (pov?.altitude !== undefined) {
-            setCurrentAltitude(pov.altitude);
-          }
-        }
-      }
-    }, 500);
-    return () => clearInterval(interval);
-  }, [isZoomed]);
 
   const handleGlobeClick = useCallback(async (lat: number, lng: number) => {
     if (abortRef.current) abortRef.current.abort();
@@ -356,9 +332,8 @@ export default function Home() {
                 if (spot) handleSpotSelect(spot);
               }}
               onGlobeClick={handleGlobeClick}
-              selectedLocation={selectedLocation}
-              isZoomed={isZoomed}
-              currentAltitude={currentAltitude}
+               selectedLocation={selectedLocation}
+               isZoomed={isZoomed}
             />
           </div>
 
