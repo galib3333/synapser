@@ -3,6 +3,7 @@
 import ReactGlobe from 'react-globe.gl';
 import { useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from 'react';
 import * as THREE from 'three';
+import { feature } from 'topojson-client';
 
 interface GlobeMarker {
   id: string;
@@ -32,8 +33,26 @@ interface GlobeClientProps {
   currentAltitude: number;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GlobeMethods = any;
+
+interface CountryFeature {
+  type: string;
+  properties: { name: string };
+  geometry: { type: string; coordinates: any };
+  id?: string | number;
+  centroid: [number, number];
+}
+
+interface Admin1Feature {
+  type: string;
+  properties: {
+    name: string;
+    admin: string;
+    iso_a2?: string;
+  };
+  geometry: { type: string; coordinates: any };
+  centroid: [number, number];
+}
 
 const TEXTURE_LEVELS = [
   { maxAlt: 3.5, url: '//unpkg.com/three-globe/example/img/earth-night.jpg' },
@@ -41,120 +60,10 @@ const TEXTURE_LEVELS = [
   { maxAlt: 1.0, url: '//unpkg.com/three-globe/example/img/earth-topology.png' },
 ];
 
-const TILE_SERVER = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const tileCache = new Map<string, HTMLImageElement>();
 
-function getTileUrl(z: number, x: number, y: number): string {
-  return TILE_SERVER.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
-}
 
-function latLngToEquiPixel(lat: number, lng: number, imgW: number, imgH: number) {
-  return {
-    x: ((lng + 180) / 360) * imgW,
-    y: ((90 - lat) / 180) * imgH,
-  };
-}
 
-function tileToLatLng(z: number, x: number, y: number) {
-  const n = Math.pow(2, z);
-  const lng = (x / n) * 360 - 180;
-  const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n))) * (180 / Math.PI);
-  return { lat, lng };
-}
-
-function getTileZoom(altitude: number): number {
-  if (altitude < 0.1) return 18;
-  if (altitude < 0.18) return 16;
-  if (altitude < 0.3) return 14;
-  if (altitude < 0.5) return 12;
-  if (altitude < 0.8) return 10;
-  return 8;
-}
-
-function getVisibleArea(altitude: number) {
-  const viewDeg = Math.max(3, altitude * 60);
-  return viewDeg;
-}
-
-async function loadTileImage(url: string): Promise<HTMLImageElement> {
-  if (tileCache.has(url)) return tileCache.get(url)!;
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const i = new Image();
-    i.crossOrigin = 'anonymous';
-    i.onload = () => resolve(i);
-    i.onerror = () => reject(new Error('Tile load failed'));
-    i.src = url;
-  });
-  tileCache.set(url, img);
-  return img;
-}
-
-async function compositeTiles(
-  centerLat: number,
-  centerLng: number,
-  altitude: number
-): Promise<HTMLCanvasElement | null> {
-  const zoom = getTileZoom(altitude);
-  const viewDeg = getVisibleArea(altitude);
-  const imgW = 2048;
-  const imgH = 1024;
-
-  const lngMin = centerLng - viewDeg;
-  const lngMax = centerLng + viewDeg;
-  const latMin = Math.max(-85, centerLat - viewDeg * 0.6);
-  const latMax = Math.min(85, centerLat + viewDeg * 0.6);
-
-  const n = Math.pow(2, zoom);
-  const xMin = Math.max(0, Math.floor(((lngMin + 180) / 360) * n));
-  const xMax = Math.min(n - 1, Math.floor(((lngMax + 180) / 360) * n));
-  const latRadMax = latMax * (Math.PI / 180);
-  const yMin = Math.max(0, Math.floor((1 - Math.log(Math.tan(latRadMax) + 1 / Math.cos(latRadMax)) / Math.PI) / 2 * n));
-  const latRadMin = latMin * (Math.PI / 180);
-  const yMax = Math.min(n - 1, Math.floor((1 - Math.log(Math.tan(latRadMin) + 1 / Math.cos(latRadMin)) / Math.PI) / 2 * n));
-
-  const tileCount = (xMax - xMin + 1) * (yMax - yMin + 1);
-  if (tileCount < 1 || tileCount > 64) return null;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = imgW;
-  canvas.height = imgH;
-
-  const baseTexture = await new Promise<HTMLImageElement>((resolve) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.src = TEXTURE_LEVELS[2].url;
-  });
-
-  const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(baseTexture, 0, 0, imgW, imgH);
-
-  const promises: Promise<void>[] = [];
-  for (let x = xMin; x <= xMax; x++) {
-    for (let y = yMin; y <= yMax; y++) {
-      const url = getTileUrl(zoom, x, y);
-      const tileLatLng = tileToLatLng(zoom, x, y);
-      const nextTile = tileToLatLng(zoom, x + 1, y + 1);
-
-      const topLeft = latLngToEquiPixel(tileLatLng.lat, tileLatLng.lng, imgW, imgH);
-      const bottomRight = latLngToEquiPixel(nextTile.lat, nextTile.lng, imgW, imgH);
-
-      const tw = Math.abs(bottomRight.x - topLeft.x);
-      const th = Math.abs(bottomRight.y - topLeft.y);
-
-      if (tw < 1 || th < 1) continue;
-
-      promises.push(
-        loadTileImage(url).then((tileImg) => {
-          ctx.drawImage(tileImg, topLeft.x, topLeft.y, tw, th);
-        }).catch(() => {})
-      );
-    }
-  }
-
-  await Promise.all(promises);
-  return canvas;
-}
+const Globe = ReactGlobe as any;
 
 const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, GlobeClientProps>(function GlobeClient({
   markers,
@@ -172,8 +81,15 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
   const [dimensions, setDimensions] = useState({ w: 1200, h: 800 });
   const highlightedRef = useRef<HTMLDivElement>(null);
   const [highlightedPos, setHighlightedPos] = useState({ x: 0, y: 0, visible: false });
-  const isGeneratingRef = useRef(false);
-  const lastTileGenRef = useRef(0);
+  const globeReadyPoller = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [countriesFeatures, setCountriesFeatures] = useState<CountryFeature[]>([]);
+  const [countriesLoaded, setCountriesLoaded] = useState(false);
+  const [admin1Features, setAdmin1Features] = useState<Admin1Feature[]>([]);
+  const [admin1Loaded, setAdmin1Loaded] = useState(false);
+  const admin1LoadingRef = useRef(false);
+  const [allPolygons, setAllPolygons] = useState<any[]>([]);
+  const countriesRef = useRef<CountryFeature[]>([]);
 
   useImperativeHandle(ref, () => ({
     flyTo: (lat: number, lng: number) => {
@@ -190,7 +106,49 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     return () => window.removeEventListener('resize', update);
   }, []);
 
-  // Progressive texture loading
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch('https://unpkg.com/world-atlas@2/countries-50m.json');
+        const world = await res.json();
+        const countries = feature(world, world.objects.countries) as any;
+        if (cancelled) return;
+
+        const data: CountryFeature[] = countries.features
+          .filter((f: any) => f.geometry)
+          .map((f: any) => {
+            const allCoords: number[][] = [];
+            const processCoords = (coords: any[][]) => {
+              coords.forEach((ring: any[]) => {
+                ring.forEach((c: number[]) => allCoords.push(c));
+              });
+            };
+            if (f.geometry.type === 'Polygon') {
+              processCoords(f.geometry.coordinates);
+            } else if (f.geometry.type === 'MultiPolygon') {
+              f.geometry.coordinates.forEach((poly: any) => processCoords(poly));
+            }
+            const centroid: [number, number] = [
+              allCoords.reduce((s, c) => s + c[1] / allCoords.length, 0),
+              allCoords.reduce((s, c) => s + c[0] / allCoords.length, 0),
+            ];
+            return { ...f, centroid };
+          });
+
+        const tagged = data.map((d: any) => ({ ...d, _level: 'country' }));
+        countriesRef.current = tagged;
+        setCountriesFeatures(tagged);
+        setCountriesLoaded(true);
+        setAllPolygons(tagged);
+      } catch (err) {
+        console.error('Failed to load country data:', err);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     if (!globeRef.current || !globeReady) return;
 
@@ -206,31 +164,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     }
   }, [currentAltitude, globeReady]);
 
-  // Tile compositing for Google-Earth detail when very zoomed in
-  useEffect(() => {
-    if (!globeRef.current || !globeReady || !isZoomed || !selectedLocation) return;
-    if (currentAltitude > 0.6) return;
-
-    const now = Date.now();
-    if (now - lastTileGenRef.current < 2000) return;
-    lastTileGenRef.current = now;
-
-    if (isGeneratingRef.current) return;
-    isGeneratingRef.current = true;
-
-    compositeTiles(selectedLocation.lat, selectedLocation.lng, currentAltitude)
-      .then((canvas) => {
-        if (canvas && globeRef.current) {
-          globeRef.current.globeImageUrl(canvas);
-        }
-        isGeneratingRef.current = false;
-      })
-      .catch(() => {
-        isGeneratingRef.current = false;
-      });
-  }, [currentAltitude, selectedLocation, isZoomed, globeReady]);
-
-  // Fly to highlighted marker
   useEffect(() => {
     if (!globeRef.current || !globeReady || !highlightedMarkerId) return;
     const marker = markers.find((m) => m.id === highlightedMarkerId);
@@ -239,7 +172,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     }
   }, [highlightedMarkerId, markers, globeReady]);
 
-  // Camera control
   useEffect(() => {
     if (!globeRef.current || !globeReady) return;
     const globe = globeRef.current;
@@ -259,7 +191,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     }
   }, [isZoomed, selectedLocation, globeReady]);
 
-  // Update highlighted marker screen position
   useEffect(() => {
     if (!highlightedMarkerId || !globeReady) {
       setHighlightedPos((p) => ({ ...p, visible: false }));
@@ -297,7 +228,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     return () => clearInterval(interval);
   }, [highlightedMarkerId, markers, globeReady, dimensions]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleGlobeClick = useCallback(
     (event: any) => {
       if (!isZoomed && event?.lat !== undefined && event?.lng !== undefined) {
@@ -307,13 +237,154 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
     [isZoomed, onGlobeClick]
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlePointClick = useCallback(
     (marker: any) => {
       onMarkerClick(marker as GlobeMarker);
     },
     [onMarkerClick]
   );
+
+  const handlePolygonClick = useCallback(
+    (polygon: any) => {
+      if (polygon.centroid) {
+        onGlobeClick(polygon.centroid[0], polygon.centroid[1]);
+      }
+    },
+    [onGlobeClick]
+  );
+
+  const getCountryName = useCallback((lat: number, lng: number): string | null => {
+    for (const country of countriesFeatures) {
+      if (!country.geometry) continue;
+      const coords = country.geometry.coordinates;
+      if (!coords) continue;
+
+      const rings: number[][][] = [];
+      if (country.geometry.type === 'Polygon') {
+        rings.push(...coords.map((ring: any) => ring.map((c: number[]) => [c[1], c[0]])));
+      } else if (country.geometry.type === 'MultiPolygon') {
+        coords.forEach((poly: any) => {
+          rings.push(...poly.map((ring: any) => ring.map((c: number[]) => [c[1], c[0]])));
+        });
+      }
+
+      for (const ring of rings) {
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [latI, lngI] = ring[i];
+          const [latJ, lngJ] = ring[j];
+          if ((lngI > lng) !== (lngJ > lng) &&
+              lat < ((latJ - latI) * (lng - lngI)) / (lngJ - lngI) + latI) {
+            inside = !inside;
+          }
+        }
+        if (inside) return country.properties?.name || null;
+      }
+    }
+    return null;
+  }, [countriesFeatures]);
+
+  useEffect(() => {
+    if (!isZoomed || !selectedLocation || admin1LoadingRef.current || admin1Features.length > 0) return;
+
+    const countryName = getCountryName(selectedLocation.lat, selectedLocation.lng);
+    if (!countryName) return;
+
+    admin1LoadingRef.current = true;
+
+    async function loadAdmin1() {
+      try {
+        const res = await fetch(
+          'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces.geojson'
+        );
+        const geoJson = await res.json();
+
+          const filtered = geoJson.features
+          .filter((f: any) =>
+            f.properties?.admin === countryName &&
+            f.geometry
+          )
+          .map((f: any) => {
+            const allCoords: number[][] = [];
+            const processCoords = (coords: any[][]) => {
+              coords.forEach((ring: any[]) => {
+                ring.forEach((c: number[]) => allCoords.push(c));
+              });
+            };
+            if (f.geometry.type === 'Polygon') {
+              processCoords(f.geometry.coordinates);
+            } else if (f.geometry.type === 'MultiPolygon') {
+              f.geometry.coordinates.forEach((poly: any) => processCoords(poly));
+            }
+            const centroid: [number, number] = [
+              allCoords.reduce((s, c) => s + c[1] / allCoords.length, 0),
+              allCoords.reduce((s, c) => s + c[0] / allCoords.length, 0),
+            ];
+            return { ...f, centroid, _level: 'admin1' };
+          });
+
+        setAdmin1Features(filtered);
+        setAdmin1Loaded(true);
+        setAllPolygons([...countriesRef.current, ...filtered]);
+        admin1LoadingRef.current = false;
+      } catch (err) {
+        console.error('Failed to load admin-1 data:', err);
+        admin1LoadingRef.current = false;
+      }
+    }
+
+    loadAdmin1();
+  }, [isZoomed, selectedLocation, getCountryName, admin1Features.length]);
+
+  useEffect(() => {
+    if (!isZoomed) {
+      setAdmin1Features([]);
+      setAdmin1Loaded(false);
+    }
+  }, [isZoomed]);
+
+  useEffect(() => {
+    const poll = setInterval(() => {
+      if (globeRef.current?.renderer && !globeReady) {
+        clearInterval(poll);
+        setGlobeReady(true);
+        const globe = globeRef.current;
+        globe.pointOfView({ lat: 20, lng: 0, altitude: 2.5 });
+        const controls = globe.controls();
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.3;
+        controls.enableZoom = true;
+        controls.enablePan = false;
+        controls.minDistance = 80;
+        controls.maxDistance = 500;
+        const scene = globe.scene();
+        scene.traverse((child: THREE.Object3D) => {
+          if (child instanceof THREE.Mesh) {
+            const material = child.material as THREE.MeshPhongMaterial;
+            if (material.emissive) {
+              material.emissiveIntensity = 0.15;
+            }
+          }
+        });
+        const renderer = globe.renderer();
+        if (renderer?.raycaster) {
+          renderer.raycaster.params.Points.threshold = 20;
+        }
+      }
+    }, 50);
+    return () => clearInterval(poll);
+  }, [globeReady]);
+
+  const tileUrlFn = useCallback((x: number, y: number, level: number) => {
+    return `https://tile.openstreetmap.org/${level}/${x}/${y}.png`;
+  }, []);
+
+  const showTiles = isZoomed && currentAltitude < 1.0;
+
+  const borderOpacity = Math.min(1, Math.max(0.18, 0.55 - currentAltitude * 0.12));
+  const admin1Opacity = Math.min(1, Math.max(0, 0.35 - currentAltitude * 0.25));
+  const countryLabelsVisible = isZoomed && currentAltitude < 1.2 && countriesLoaded;
+  const admin1LabelsVisible = isZoomed && currentAltitude < 0.9 && admin1Loaded && admin1Features.length > 0;
 
   const categoryColorMap: Record<string, string> = {
     attraction: '#dcd8c0',
@@ -338,7 +409,7 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
 
   return (
     <div className="globe-container absolute inset-0 z-10">
-      <ReactGlobe
+      <Globe
         ref={globeRef}
         globeImageUrl={TEXTURE_LEVELS[0].url}
         backgroundImageUrl=""
@@ -348,62 +419,91 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
         pointsData={markers}
         pointLat="lat"
         pointLng="lng"
-        pointColor={(d) => {
+        pointColor={(d: any) => {
           const marker = d as GlobeMarker;
           const isHighlighted = marker.id === highlightedMarkerId;
           if (isHighlighted) return '#ffffff';
           return categoryColorMap[marker.category] || '#dcd8c0';
         }}
-        pointAltitude={(d) => {
+        pointAltitude={(d: any) => {
           const marker = d as GlobeMarker;
           return marker.id === highlightedMarkerId ? 0.06 : (isZoomed ? 0.03 : 0.01);
         }}
-        pointRadius={(d) => {
+        pointRadius={(d: any) => {
           const marker = d as GlobeMarker;
           const base = isZoomed ? Math.max(marker.size * 1.5, 0.5) : marker.size * 0.6;
           return marker.id === highlightedMarkerId ? base * 2.5 : base;
         }}
-        pointLabel={(d) => {
+        pointLabel={(d: any) => {
           const marker = d as GlobeMarker;
           return `<div style="background:rgba(13,13,13,0.92);padding:8px 14px;border:1px solid rgba(220,216,192,0.25);font-family:'General Sans',sans-serif;font-size:13px;color:#dcd8c0;white-space:nowrap;backdrop-filter:blur(8px);border-radius:2px;">${marker.name}</div>`;
         }}
         onPointClick={handlePointClick}
         onGlobeClick={handleGlobeClick}
-        onGlobeReady={() => {
-          setGlobeReady(true);
-          if (globeRef.current) {
-            const globe = globeRef.current;
-            globe.pointOfView({ lat: 20, lng: 0, altitude: 2.5 });
-
-            const controls = globe.controls();
-            controls.autoRotate = true;
-            controls.autoRotateSpeed = 0.3;
-            controls.enableZoom = true;
-            controls.enablePan = false;
-            controls.minDistance = 80;
-            controls.maxDistance = 500;
-
-            const scene = globe.scene();
-            scene.traverse((child: THREE.Object3D) => {
-              if (child instanceof THREE.Mesh) {
-                const material = child.material as THREE.MeshPhongMaterial;
-                if (material.emissive) {
-                  material.emissiveIntensity = 0.15;
-                }
-              }
-            });
-
-            const renderer = globe.renderer();
-            if (renderer?.raycaster) {
-              renderer.raycaster.params.Points.threshold = 20;
-            }
+        polygonsData={allPolygons}
+        polygonGeoJsonGeometry="geometry"
+        polygonCapColor={() => 'rgba(0,0,0,0)'}
+        polygonStrokeColor={(d: any) => {
+          if (d._level === 'admin1') {
+            return `rgba(180, 210, 180, ${admin1Opacity})`;
           }
+          return `rgba(235, 228, 210, ${borderOpacity})`;
         }}
+        polygonAltitude={(d: any) => d._level === 'admin1' ? 0.004 : 0.002}
+        polygonLabel={(d: any) => `<div style="background:rgba(13,13,13,0.88);padding:6px 12px;border:1px solid rgba(220,216,192,0.2);font-family:'General Sans',sans-serif;font-size:12px;color:#dcd8c0;white-space:nowrap;border-radius:2px;">${d.properties?.name || d.name}</div>`}
+        onPolygonClick={handlePolygonClick}
+        onGlobeReady={() => {}}
         atmosphereColor="#dcd8c0"
         atmosphereAltitude={0.15}
+        globeTileEngineUrl={showTiles ? tileUrlFn : null}
+        globeTileEngineMaxLevel={19}
       />
 
-      {/* Highlighted marker pulse ring */}
+      {admin1LabelsVisible && (
+        <div className="absolute inset-0 pointer-events-none z-13">
+          {admin1Features.map((admin1: any, i: number) => {
+            const name = admin1.properties?.name;
+            if (!name) return null;
+            const [lat, lng] = admin1.centroid;
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lng + 180) * (Math.PI / 180);
+            const radius = 100.007;
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = -radius * Math.cos(phi);
+            const z = radius * Math.sin(phi) * Math.sin(theta);
+
+            const fov = 45;
+            const aspect = dimensions.w / dimensions.h;
+            const camZ = 300;
+            const scale = fov / (camZ - z);
+            const screenX = (x * scale * dimensions.w) / 2 / fov + dimensions.w / 2;
+            const screenY = (y * scale * dimensions.h) / 2 / fov + dimensions.h / 2;
+
+            if (z > 0) return null;
+
+            const labelOpacity = Math.min(1, Math.max(0, (0.9 - currentAltitude) * 1.8));
+
+            return (
+              <div
+                key={i}
+                className="absolute transition-opacity duration-700"
+                style={{
+                  left: screenX,
+                  top: screenY,
+                  transform: 'translate(-50%, -50%)',
+                  opacity: labelOpacity,
+                  fontSize: `${Math.max(9, 11 - currentAltitude * 3)}px`,
+                }}
+              >
+                <span className="font-mono text-accent/20 uppercase tracking-[0.2em] whitespace-nowrap">
+                  {name}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {highlightedPos.visible && (
         <div
           ref={highlightedRef}
@@ -419,7 +519,6 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
         </div>
       )}
 
-      {/* Country/Region labels layer */}
       {isZoomed && globeReady && labels.length > 0 && (
         <div className="absolute inset-0 pointer-events-none z-15">
           {labels.map((label, i) => {
@@ -453,6 +552,50 @@ const GlobeClient = forwardRef<{ flyTo: (lat: number, lng: number) => void }, Gl
               >
                 <span className="font-mono text-accent/40 uppercase tracking-[0.15em] whitespace-nowrap">
                   {label.text}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {countryLabelsVisible && (
+        <div className="absolute inset-0 pointer-events-none z-14">
+          {countriesFeatures.map((country, i) => {
+            const name = country.properties?.name;
+            const [lat, lng] = country.centroid;
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lng + 180) * (Math.PI / 180);
+            const radius = 100.005;
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = -radius * Math.cos(phi);
+            const z = radius * Math.sin(phi) * Math.sin(theta);
+
+            const fov = 45;
+            const aspect = dimensions.w / dimensions.h;
+            const camZ = 300;
+            const scale = fov / (camZ - z);
+            const screenX = (x * scale * dimensions.w) / 2 / fov + dimensions.w / 2;
+            const screenY = (y * scale * dimensions.h) / 2 / fov + dimensions.h / 2;
+
+            if (z > 0) return null;
+
+            const labelOpacity = Math.min(1, Math.max(0, (1.2 - currentAltitude) * 1.5));
+
+            return (
+              <div
+                key={i}
+                className="absolute transition-opacity duration-700"
+                style={{
+                  left: screenX,
+                  top: screenY,
+                  transform: 'translate(-50%, -50%)',
+                  opacity: labelOpacity,
+                  fontSize: `${Math.max(10, 13 - currentAltitude * 4)}px`,
+                }}
+              >
+                <span className="font-mono text-accent/25 uppercase tracking-[0.25em] whitespace-nowrap">
+                  {name}
                 </span>
               </div>
             );
